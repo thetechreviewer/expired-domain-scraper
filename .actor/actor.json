@@ -1,0 +1,12 @@
+{
+  "actorSpecification": 1,
+  "name": "expired-domain-scraper",
+  "title": "Expired Domain Link Finder",
+  "description": "Crawl a site, extract broken outgoing links, and flag likely expired domains.",
+  "version": "0.1",
+  "meta": {
+    "templateId": "js-crawlee-cheerio"
+  },
+  "input": "./input_schema.json",
+  "dockerfile": "./Dockerfile"
+}

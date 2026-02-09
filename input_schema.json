@@ -1,0 +1,113 @@
+{
+  "title": "Expired Domain Link Finder",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrls": {
+      "title": "Start URLs (one or more)",
+      "type": "array",
+      "description": "One or more root domains/URLs to crawl. Example: https://example.com or example.com",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "https://example.com"
+      ]
+    },
+    "startUrl": {
+      "title": "Single start URL (legacy)",
+      "type": "string",
+      "description": "Optional backward-compatible single URL input.",
+      "editor": "textfield"
+    },
+    "maxPages": {
+      "title": "Max pages to crawl (per start URL)",
+      "type": "integer",
+      "description": "Set 0 to crawl all discovered in-domain pages for each start URL.",
+      "minimum": 0,
+      "default": 200
+    },
+    "maxCrawlDepth": {
+      "title": "Max click depth",
+      "type": "integer",
+      "description": "0 = unlimited depth. 1 = only links from the start page. 2+ = deeper crawl.",
+      "minimum": 0,
+      "default": 0
+    },
+    "followSubdomains": {
+      "title": "Include subdomains",
+      "type": "boolean",
+      "description": "If true, crawling includes subdomains of the target domain.",
+      "default": true
+    },
+    "maxConcurrency": {
+      "title": "Max crawler concurrency",
+      "type": "integer",
+      "description": "Higher values are faster but heavier on resources.",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 20
+    },
+    "requestTimeoutSecs": {
+      "title": "Crawler request timeout (seconds)",
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 120,
+      "default": 30
+    },
+    "includeNofollow": {
+      "title": "Include nofollow links",
+      "type": "boolean",
+      "default": true
+    },
+    "checkDomainExpiry": {
+      "title": "Try to detect likely expired target domains",
+      "type": "boolean",
+      "description": "Adds DNS/root checks for each broken link domain.",
+      "default": true
+    },
+    "checkTimeoutSecs": {
+      "title": "Outgoing link check timeout (seconds)",
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 120,
+      "default": 20
+    },
+    "linkCheckConcurrency": {
+      "title": "Outgoing link check concurrency",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 30
+    },
+    "useApifyProxy": {
+      "title": "Use Apify Proxy",
+      "type": "boolean",
+      "description": "Enable Apify Proxy for crawling and outgoing link checks.",
+      "default": false
+    },
+    "useResidentialProxies": {
+      "title": "Use residential proxies (Apify add-on)",
+      "type": "boolean",
+      "description": "If enabled, actor requests proxy group RESIDENTIAL. Charges depend on your Apify plan.",
+      "default": false
+    },
+    "apifyProxyGroups": {
+      "title": "Additional Apify Proxy groups",
+      "type": "array",
+      "description": "Optional extra groups such as SHADER, BUYPROXIES94952, etc.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "apifyProxyCountry": {
+      "title": "Apify Proxy country code",
+      "type": "string",
+      "description": "Optional 2-letter country code (e.g. US).",
+      "editor": "textfield"
+    }
+  },
+  "required": []
+}
