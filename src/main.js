@@ -285,6 +285,103 @@ try {
   const crawlErrors = [];
   const crawlByDomain = [];
   let totalCrawledPages = 0;
+  const brokenOutgoingLinks = [];
+  const domainCandidatesMap = new Map();
+  let linksChecked = 0;
+  let phase = 'crawling';
+
+  function buildDomainCandidates() {
+    return Array.from(domainCandidatesMap.values())
+      .filter((entry) => entry.brokenUrlCount >= minBrokenLinksPerDomain)
+      .map((entry) => ({
+        domain: entry.domain,
+        isLikelyExpiredDomain: entry.isLikelyExpiredDomain,
+        brokenUrlCount: entry.brokenUrlCount,
+        brokenUrls: Array.from(entry.brokenUrls),
+        anchorTexts: Array.from(entry.anchorTexts),
+        foundOnDomainCount: entry.foundOnDomains.size,
+        foundOnDomains: Array.from(entry.foundOnDomains),
+        foundOnStartUrlCount: entry.foundOnStartUrls.size,
+        foundOnStartUrls: Array.from(entry.foundOnStartUrls),
+        sourceUrlCount: entry.sourceUrls.size,
+        sourceUrls: Array.from(entry.sourceUrls),
+        expiryReason: entry.expiryReason,
+        expiryConfidence: entry.expiryConfidence,
+        domainDiagnostics: entry.domainDiagnostics,
+      }))
+      .sort((a, b) => {
+        if (a.isLikelyExpiredDomain !== b.isLikelyExpiredDomain) {
+          return Number(b.isLikelyExpiredDomain) - Number(a.isLikelyExpiredDomain);
+        }
+        return b.brokenUrlCount - a.brokenUrlCount;
+      });
+  }
+
+  async function savePartialResults() {
+    const domainCandidates = buildDomainCandidates();
+    const expiredDomains = domainCandidates.filter((item) => item.isLikelyExpiredDomain);
+    const externalEntryCount = externalLinks.size;
+
+    await Actor.setValue('EXPIRED_DOMAINS', expiredDomains);
+    await Actor.setValue('DOMAIN_CANDIDATES', domainCandidates);
+    await Actor.setValue('SUMMARY', {
+      status: phase === 'done' ? 'complete' : 'partial',
+      phase,
+      input: {
+        startUrls,
+        maxPages,
+        maxCrawlDepth,
+        followSubdomains,
+        maxConcurrency,
+        requestTimeoutSecs,
+        maxRequestsPerMinute,
+        requestDelayMin,
+        requestDelayMax,
+        respectRobotsTxt,
+        includeNofollow,
+        checkDomainExpiry: checkDomainExpiryEnabled,
+        checkTimeoutSecs,
+        linkCheckConcurrency,
+        excludeDomains: Array.from(excludeDomains),
+        minBrokenLinksPerDomain,
+        extractAnchorText,
+        useApifyProxy,
+        useResidentialProxies,
+        apifyProxyGroups: proxyGroups,
+        apifyProxyCountry,
+      },
+      stats: {
+        scannedDomains: startUrls.length,
+        crawledPages: totalCrawledPages,
+        uniqueExternalLinksFound: externalEntryCount,
+        linksChecked,
+        brokenOutgoingLinksFound: brokenOutgoingLinks.length,
+        uniqueDomainCandidates: domainCandidates.length,
+        likelyExpiredDomainsFound: expiredDomains.length,
+        crawlFailures: crawlErrors.length,
+      },
+      crawlByDomain,
+      crawlFailures: crawlErrors,
+    });
+
+    log.info('Saved partial results', {
+      phase,
+      crawledPages: totalCrawledPages,
+      linksChecked,
+      brokenLinks: brokenOutgoingLinks.length,
+      expiredDomains: expiredDomains.length,
+    });
+  }
+
+  // Save results every 30 seconds so partial data survives timeouts
+  const saveInterval = setInterval(() => savePartialResults().catch(() => {}), 30_000);
+
+  // Save results if Apify is about to kill the actor
+  Actor.on('aborting', async () => {
+    log.info('Actor aborting — saving partial results before exit...');
+    clearInterval(saveInterval);
+    await savePartialResults();
+  });
 
   log.info('Starting crawl across input domains', {
     startUrlCount: startUrls.length,
@@ -415,45 +512,18 @@ try {
   }
 
   const externalEntries = Array.from(externalLinks.values());
+  phase = 'checking_links';
   log.info('Finished crawling. Checking external links.', {
     totalCrawledPages,
     externalLinkCount: externalEntries.length,
   });
 
+  // Save crawl progress before starting link checks
+  await savePartialResults();
+
   const domainCheckCache = new Map();
-  const checked = await mapWithConcurrency(externalEntries, linkCheckConcurrency, async (link) => {
-    const linkStatus = await checkOutgoingUrl(link.targetUrl, checkTimeoutSecs, proxyConfiguration);
-    if (!linkStatus.broken) return null;
 
-    const domainStatus = checkDomainExpiryEnabled
-      ? await checkDomainExpiry(link.targetDomain, checkTimeoutSecs, proxyConfiguration, domainCheckCache)
-      : null;
-
-    return {
-      targetUrl: link.targetUrl,
-      targetDomain: link.targetDomain,
-      anchorTexts: Array.from(link.anchorTexts),
-      sourceUrlCount: link.sourcePages.size,
-      sourceUrls: Array.from(link.sourcePages),
-      foundOnDomains: Array.from(link.foundOnDomains),
-      foundOnStartUrls: Array.from(link.foundOnStartUrls),
-      linkCheckMethod: linkStatus.checkMethod,
-      linkStatusCode: linkStatus.statusCode,
-      linkFinalUrl: linkStatus.finalUrl,
-      linkErrorCode: linkStatus.errorCode,
-      linkErrorMessage: linkStatus.errorMessage,
-      isBrokenOutgoingLink: true,
-      isLikelyExpiredDomain: domainStatus ? domainStatus.isLikelyExpired : null,
-      expiryReason: domainStatus ? domainStatus.expiryReason : null,
-      expiryConfidence: domainStatus ? domainStatus.confidence : null,
-      domainDiagnostics: domainStatus,
-    };
-  });
-
-  const brokenOutgoingLinks = checked.filter(Boolean);
-
-  const domainCandidatesMap = new Map();
-  for (const item of brokenOutgoingLinks) {
+  function addToDomainCandidates(item) {
     const existing = domainCandidatesMap.get(item.targetDomain);
     if (existing) {
       existing.brokenUrlCount += 1;
@@ -486,82 +556,58 @@ try {
     }
   }
 
-  const domainCandidates = Array.from(domainCandidatesMap.values())
-    .filter((entry) => entry.brokenUrlCount >= minBrokenLinksPerDomain)
-    .map((entry) => ({
-      domain: entry.domain,
-      isLikelyExpiredDomain: entry.isLikelyExpiredDomain,
-      brokenUrlCount: entry.brokenUrlCount,
-      brokenUrls: Array.from(entry.brokenUrls),
-      anchorTexts: Array.from(entry.anchorTexts),
-      foundOnDomainCount: entry.foundOnDomains.size,
-      foundOnDomains: Array.from(entry.foundOnDomains),
-      foundOnStartUrlCount: entry.foundOnStartUrls.size,
-      foundOnStartUrls: Array.from(entry.foundOnStartUrls),
-      sourceUrlCount: entry.sourceUrls.size,
-      sourceUrls: Array.from(entry.sourceUrls),
-      expiryReason: entry.expiryReason,
-      expiryConfidence: entry.expiryConfidence,
-      domainDiagnostics: entry.domainDiagnostics,
-    }))
-    .sort((a, b) => {
-      if (a.isLikelyExpiredDomain !== b.isLikelyExpiredDomain) {
-        return Number(b.isLikelyExpiredDomain) - Number(a.isLikelyExpiredDomain);
-      }
-      return b.brokenUrlCount - a.brokenUrlCount;
-    });
+  await mapWithConcurrency(externalEntries, linkCheckConcurrency, async (link) => {
+    const linkStatus = await checkOutgoingUrl(link.targetUrl, checkTimeoutSecs, proxyConfiguration);
+    linksChecked += 1;
 
-  const expiredDomains = domainCandidates.filter((item) => item.isLikelyExpiredDomain);
+    if (!linkStatus.broken) return;
 
-  if (brokenOutgoingLinks.length > 0) {
-    await Actor.pushData(brokenOutgoingLinks);
-  }
+    const domainStatus = checkDomainExpiryEnabled
+      ? await checkDomainExpiry(link.targetDomain, checkTimeoutSecs, proxyConfiguration, domainCheckCache)
+      : null;
 
-  await Actor.setValue('EXPIRED_DOMAINS', expiredDomains);
-  await Actor.setValue('DOMAIN_CANDIDATES', domainCandidates);
+    const result = {
+      targetUrl: link.targetUrl,
+      targetDomain: link.targetDomain,
+      anchorTexts: Array.from(link.anchorTexts),
+      sourceUrlCount: link.sourcePages.size,
+      sourceUrls: Array.from(link.sourcePages),
+      foundOnDomains: Array.from(link.foundOnDomains),
+      foundOnStartUrls: Array.from(link.foundOnStartUrls),
+      linkCheckMethod: linkStatus.checkMethod,
+      linkStatusCode: linkStatus.statusCode,
+      linkFinalUrl: linkStatus.finalUrl,
+      linkErrorCode: linkStatus.errorCode,
+      linkErrorMessage: linkStatus.errorMessage,
+      isBrokenOutgoingLink: true,
+      isLikelyExpiredDomain: domainStatus ? domainStatus.isLikelyExpired : null,
+      expiryReason: domainStatus ? domainStatus.expiryReason : null,
+      expiryConfidence: domainStatus ? domainStatus.confidence : null,
+      domainDiagnostics: domainStatus,
+    };
 
-  const summary = {
-    input: {
-      startUrls,
-      maxPages,
-      maxCrawlDepth,
-      followSubdomains,
-      maxConcurrency,
-      requestTimeoutSecs,
-      maxRequestsPerMinute,
-      requestDelayMin,
-      requestDelayMax,
-      respectRobotsTxt,
-      includeNofollow,
-      checkDomainExpiry: checkDomainExpiryEnabled,
-      checkTimeoutSecs,
-      linkCheckConcurrency,
-      excludeDomains: Array.from(excludeDomains),
-      minBrokenLinksPerDomain,
-      extractAnchorText,
-      useApifyProxy,
-      useResidentialProxies,
-      apifyProxyGroups: proxyGroups,
-      apifyProxyCountry,
-    },
-    stats: {
-      scannedDomains: startUrls.length,
-      crawledPages: totalCrawledPages,
-      uniqueExternalLinksFound: externalEntries.length,
-      brokenOutgoingLinksFound: brokenOutgoingLinks.length,
-      uniqueDomainCandidates: domainCandidates.length,
-      likelyExpiredDomainsFound: expiredDomains.length,
-      crawlFailures: crawlErrors.length,
-    },
-    crawlByDomain,
-    crawlFailures: crawlErrors,
-  };
+    brokenOutgoingLinks.push(result);
+    addToDomainCandidates(result);
 
-  await Actor.setValue('SUMMARY', summary);
+    // Push each broken link to the dataset immediately
+    await Actor.pushData([result]);
+  });
 
-  log.info('Actor finished', summary.stats);
+  // Final save
+  clearInterval(saveInterval);
+  phase = 'done';
+  await savePartialResults();
+
+  log.info('Actor finished', {
+    crawledPages: totalCrawledPages,
+    linksChecked,
+    brokenLinks: brokenOutgoingLinks.length,
+    expiredDomains: buildDomainCandidates().filter((d) => d.isLikelyExpiredDomain).length,
+  });
 } catch (error) {
+  clearInterval(saveInterval);
   log.error('Actor failed', { message: error?.message, stack: error?.stack });
+  await savePartialResults().catch(() => {});
   throw error;
 } finally {
   await Actor.exit();
