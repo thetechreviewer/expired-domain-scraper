@@ -1,0 +1,8 @@
+.git
+.github
+node_modules
+.apify_storage
+storage
+.DS_Store
+.claude
+npm-debug.log*
