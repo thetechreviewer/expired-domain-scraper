@@ -21,7 +21,13 @@ function normalizeHttpUrl(rawUrl, baseUrl) {
 
 function normalizeStartUrl(rawUrl) {
   if (!rawUrl) return null;
-  const trimmed = String(rawUrl).trim();
+
+  // Handle Apify requestListSources format: { url: "..." }
+  const raw = typeof rawUrl === 'object' && rawUrl !== null && rawUrl.url
+    ? rawUrl.url
+    : rawUrl;
+
+  const trimmed = String(raw).trim();
   if (!trimmed) return null;
 
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
@@ -174,8 +180,10 @@ async function checkDomainExpiry(domain, timeoutSecs, proxyConfiguration, cache)
   const httpsRoot = `https://${domain}/`;
   const httpRoot = `http://${domain}/`;
 
-  const httpsResult = await checkOutgoingUrl(httpsRoot, timeoutSecs, proxyConfiguration);
-  const httpResult = await checkOutgoingUrl(httpRoot, timeoutSecs, proxyConfiguration);
+  const [httpsResult, httpResult] = await Promise.all([
+    checkOutgoingUrl(httpsRoot, timeoutSecs, proxyConfiguration),
+    checkOutgoingUrl(httpRoot, timeoutSecs, proxyConfiguration),
+  ]);
 
   result.rootHttpsStatusCode = httpsResult.statusCode;
   result.rootHttpStatusCode = httpResult.statusCode;
@@ -557,40 +565,45 @@ try {
   }
 
   await mapWithConcurrency(externalEntries, linkCheckConcurrency, async (link) => {
-    const linkStatus = await checkOutgoingUrl(link.targetUrl, checkTimeoutSecs, proxyConfiguration);
-    linksChecked += 1;
+    try {
+      const linkStatus = await checkOutgoingUrl(link.targetUrl, checkTimeoutSecs, proxyConfiguration);
+      linksChecked += 1;
 
-    if (!linkStatus.broken) return;
+      if (!linkStatus.broken) return;
 
-    const domainStatus = checkDomainExpiryEnabled
-      ? await checkDomainExpiry(link.targetDomain, checkTimeoutSecs, proxyConfiguration, domainCheckCache)
-      : null;
+      const domainStatus = checkDomainExpiryEnabled
+        ? await checkDomainExpiry(link.targetDomain, checkTimeoutSecs, proxyConfiguration, domainCheckCache)
+        : null;
 
-    const result = {
-      targetUrl: link.targetUrl,
-      targetDomain: link.targetDomain,
-      anchorTexts: Array.from(link.anchorTexts),
-      sourceUrlCount: link.sourcePages.size,
-      sourceUrls: Array.from(link.sourcePages),
-      foundOnDomains: Array.from(link.foundOnDomains),
-      foundOnStartUrls: Array.from(link.foundOnStartUrls),
-      linkCheckMethod: linkStatus.checkMethod,
-      linkStatusCode: linkStatus.statusCode,
-      linkFinalUrl: linkStatus.finalUrl,
-      linkErrorCode: linkStatus.errorCode,
-      linkErrorMessage: linkStatus.errorMessage,
-      isBrokenOutgoingLink: true,
-      isLikelyExpiredDomain: domainStatus ? domainStatus.isLikelyExpired : null,
-      expiryReason: domainStatus ? domainStatus.expiryReason : null,
-      expiryConfidence: domainStatus ? domainStatus.confidence : null,
-      domainDiagnostics: domainStatus,
-    };
+      const result = {
+        targetUrl: link.targetUrl,
+        targetDomain: link.targetDomain,
+        anchorTexts: Array.from(link.anchorTexts),
+        sourceUrlCount: link.sourcePages.size,
+        sourceUrls: Array.from(link.sourcePages),
+        foundOnDomains: Array.from(link.foundOnDomains),
+        foundOnStartUrls: Array.from(link.foundOnStartUrls),
+        linkCheckMethod: linkStatus.checkMethod,
+        linkStatusCode: linkStatus.statusCode,
+        linkFinalUrl: linkStatus.finalUrl,
+        linkErrorCode: linkStatus.errorCode,
+        linkErrorMessage: linkStatus.errorMessage,
+        isBrokenOutgoingLink: true,
+        isLikelyExpiredDomain: domainStatus ? domainStatus.isLikelyExpired : null,
+        expiryReason: domainStatus ? domainStatus.expiryReason : null,
+        expiryConfidence: domainStatus ? domainStatus.confidence : null,
+        domainDiagnostics: domainStatus,
+      };
 
-    brokenOutgoingLinks.push(result);
-    addToDomainCandidates(result);
+      brokenOutgoingLinks.push(result);
+      addToDomainCandidates(result);
 
-    // Push each broken link to the dataset immediately
-    await Actor.pushData([result]);
+      // Push each broken link to the dataset immediately
+      await Actor.pushData([result]);
+    } catch (err) {
+      log.warning('Failed to check link', { url: link.targetUrl, error: err?.message });
+      linksChecked += 1;
+    }
   });
 
   // Final save
