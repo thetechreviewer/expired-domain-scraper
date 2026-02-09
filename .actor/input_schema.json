@@ -110,7 +110,72 @@
       "title": "Apify Proxy country code",
       "type": "string",
       "description": "Optional 2-letter country code (e.g. US).",
-      "editor": "textfield"
+      "editor": "textfield",
+      "sectionCaption": "Proxy settings"
+    },
+    "maxRequestsPerMinute": {
+      "title": "Max requests per minute",
+      "type": "integer",
+      "description": "Limits how many pages the crawler requests per minute. Lower values reduce the chance of getting blocked. 0 = unlimited.",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 60,
+      "sectionCaption": "Rate limiting"
+    },
+    "requestDelayMin": {
+      "title": "Min delay between requests (ms)",
+      "type": "integer",
+      "description": "Minimum random delay in milliseconds before each request. Combined with max delay to create natural-looking request patterns.",
+      "minimum": 0,
+      "maximum": 60000,
+      "default": 500
+    },
+    "requestDelayMax": {
+      "title": "Max delay between requests (ms)",
+      "type": "integer",
+      "description": "Maximum random delay in milliseconds before each request. A random value between min and max delay is chosen for each request.",
+      "minimum": 0,
+      "maximum": 60000,
+      "default": 3000
+    },
+    "respectRobotsTxt": {
+      "title": "Respect robots.txt",
+      "type": "boolean",
+      "description": "If true, the crawler will honor robots.txt rules and skip disallowed pages.",
+      "default": true
+    },
+    "excludeDomains": {
+      "title": "Exclude domains from checking",
+      "type": "array",
+      "description": "List of domains to skip when checking outgoing links. Useful for skipping known large sites like google.com, facebook.com, etc.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "prefill": [
+        "google.com",
+        "facebook.com",
+        "twitter.com",
+        "youtube.com",
+        "linkedin.com",
+        "instagram.com",
+        "amazon.com",
+        "wikipedia.org"
+      ],
+      "sectionCaption": "Filtering"
+    },
+    "minBrokenLinksPerDomain": {
+      "title": "Min broken links to flag a domain",
+      "type": "integer",
+      "description": "Only flag a domain as a candidate if it has at least this many broken links. Reduces noise from one-off 404s.",
+      "minimum": 1,
+      "default": 1
+    },
+    "extractAnchorText": {
+      "title": "Extract anchor text",
+      "type": "boolean",
+      "description": "If true, captures the visible link text for each broken outgoing link. Useful for understanding context and SEO value.",
+      "default": true
     }
   },
   "required": []

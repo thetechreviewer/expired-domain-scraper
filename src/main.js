@@ -52,6 +52,11 @@ function toSafeInt(value, fallback, min = 1) {
   return parsed < min ? min : parsed;
 }
 
+function randomDelay(minMs, maxMs) {
+  const ms = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function fetchHttpStatus(url, method, timeoutSecs, proxyConfiguration) {
   try {
     const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl(url) : undefined;
@@ -251,6 +256,18 @@ try {
   const useResidentialProxies = Boolean(withDefault(input, 'useResidentialProxies', false));
   const apifyProxyGroups = Array.isArray(input.apifyProxyGroups) ? input.apifyProxyGroups.filter(Boolean) : [];
   const apifyProxyCountry = input.apifyProxyCountry ? String(input.apifyProxyCountry).toUpperCase() : undefined;
+  const maxRequestsPerMinute = toSafeInt(withDefault(input, 'maxRequestsPerMinute', 60), 60, 0);
+  const requestDelayMin = toSafeInt(withDefault(input, 'requestDelayMin', 500), 500, 0);
+  const requestDelayMax = toSafeInt(withDefault(input, 'requestDelayMax', 3000), 3000, 0);
+  const respectRobotsTxt = Boolean(withDefault(input, 'respectRobotsTxt', true));
+  const excludeDomains = new Set(
+    (Array.isArray(input.excludeDomains) ? input.excludeDomains : [])
+      .map((d) => String(d).trim().toLowerCase())
+      .filter(Boolean)
+      .map((d) => getRegistrableDomain(d)),
+  );
+  const minBrokenLinksPerDomain = toSafeInt(withDefault(input, 'minBrokenLinksPerDomain', 1), 1, 1);
+  const extractAnchorText = Boolean(withDefault(input, 'extractAnchorText', true));
 
   const proxyGroups = [...apifyProxyGroups];
   if (useResidentialProxies && !proxyGroups.includes('RESIDENTIAL')) {
@@ -274,6 +291,10 @@ try {
     maxPagesPerDomain: maxPages > 0 ? maxPages : 'all discovered pages',
     maxCrawlDepth: maxCrawlDepth > 0 ? maxCrawlDepth : 'unlimited',
     followSubdomains,
+    maxRequestsPerMinute: maxRequestsPerMinute > 0 ? maxRequestsPerMinute : 'unlimited',
+    requestDelay: `${requestDelayMin}-${requestDelayMax}ms`,
+    respectRobotsTxt,
+    excludedDomains: excludeDomains.size,
     useApifyProxy,
     proxyGroups,
     apifyProxyCountry,
@@ -295,8 +316,15 @@ try {
       proxyConfiguration,
       maxConcurrency,
       maxRequestsPerCrawl: maxPages > 0 ? maxPages : undefined,
+      maxRequestsPerMinute: maxRequestsPerMinute > 0 ? maxRequestsPerMinute : undefined,
       requestHandlerTimeoutSecs: requestTimeoutSecs,
+      useSessionPool: true,
+      ignoreSslErrors: true,
+      respectRobotsTxt,
       async requestHandler({ request, $, contentType }) {
+        if (requestDelayMax > 0) {
+          await randomDelay(requestDelayMin, requestDelayMax);
+        }
         const pageUrl = request.loadedUrl || request.url;
         const depth = toSafeInt(request.userData?.depth ?? 0, 0, 0);
 
@@ -328,11 +356,19 @@ try {
 
           const parsed = new URL(normalized);
           const targetDomain = getRegistrableDomain(parsed.hostname);
+
+          if (excludeDomains.has(targetDomain)) return;
+
+          const anchorText = extractAnchorText
+            ? $(el).text().trim().substring(0, 500) || null
+            : null;
+
           const existing = externalLinks.get(normalized);
           if (existing) {
             existing.sourcePages.add(pageUrl);
             existing.foundOnDomains.add(baseDomain);
             existing.foundOnStartUrls.add(startUrl);
+            if (anchorText) existing.anchorTexts.add(anchorText);
           } else {
             externalLinks.set(normalized, {
               targetUrl: normalized,
@@ -340,6 +376,7 @@ try {
               sourcePages: new Set([pageUrl]),
               foundOnDomains: new Set([baseDomain]),
               foundOnStartUrls: new Set([startUrl]),
+              anchorTexts: new Set(anchorText ? [anchorText] : []),
             });
           }
         });
@@ -396,6 +433,7 @@ try {
     return {
       targetUrl: link.targetUrl,
       targetDomain: link.targetDomain,
+      anchorTexts: Array.from(link.anchorTexts),
       sourceUrlCount: link.sourcePages.size,
       sourceUrls: Array.from(link.sourcePages),
       foundOnDomains: Array.from(link.foundOnDomains),
@@ -424,6 +462,7 @@ try {
       existing.foundOnDomains = new Set([...existing.foundOnDomains, ...item.foundOnDomains]);
       existing.foundOnStartUrls = new Set([...existing.foundOnStartUrls, ...item.foundOnStartUrls]);
       existing.sourceUrls = new Set([...existing.sourceUrls, ...item.sourceUrls]);
+      for (const a of item.anchorTexts) existing.anchorTexts.add(a);
       existing.isLikelyExpiredDomain = existing.isLikelyExpiredDomain || Boolean(item.isLikelyExpiredDomain);
 
       if (item.isLikelyExpiredDomain && !existing.expiryReason) {
@@ -440,6 +479,7 @@ try {
         foundOnDomains: new Set(item.foundOnDomains),
         foundOnStartUrls: new Set(item.foundOnStartUrls),
         sourceUrls: new Set(item.sourceUrls),
+        anchorTexts: new Set(item.anchorTexts),
         expiryReason: item.isLikelyExpiredDomain ? item.expiryReason : null,
         expiryConfidence: item.isLikelyExpiredDomain ? item.expiryConfidence : null,
         domainDiagnostics: item.isLikelyExpiredDomain ? item.domainDiagnostics : null,
@@ -448,11 +488,13 @@ try {
   }
 
   const domainCandidates = Array.from(domainCandidatesMap.values())
+    .filter((entry) => entry.brokenUrlCount >= minBrokenLinksPerDomain)
     .map((entry) => ({
       domain: entry.domain,
       isLikelyExpiredDomain: entry.isLikelyExpiredDomain,
       brokenUrlCount: entry.brokenUrlCount,
       brokenUrls: Array.from(entry.brokenUrls),
+      anchorTexts: Array.from(entry.anchorTexts),
       foundOnDomainCount: entry.foundOnDomains.size,
       foundOnDomains: Array.from(entry.foundOnDomains),
       foundOnStartUrlCount: entry.foundOnStartUrls.size,
@@ -487,10 +529,17 @@ try {
       followSubdomains,
       maxConcurrency,
       requestTimeoutSecs,
+      maxRequestsPerMinute,
+      requestDelayMin,
+      requestDelayMax,
+      respectRobotsTxt,
       includeNofollow,
       checkDomainExpiry: checkDomainExpiryEnabled,
       checkTimeoutSecs,
       linkCheckConcurrency,
+      excludeDomains: Array.from(excludeDomains),
+      minBrokenLinksPerDomain,
+      extractAnchorText,
       useApifyProxy,
       useResidentialProxies,
       apifyProxyGroups: proxyGroups,
