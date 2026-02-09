@@ -438,6 +438,15 @@ try {
         crawledPagesForDomain += 1;
         totalCrawledPages += 1;
 
+        if (crawledPagesForDomain % 25 === 0) {
+          log.info('Crawl progress', {
+            domain: baseDomain,
+            pagesCrawled: crawledPagesForDomain,
+            externalLinksFound: externalLinks.size,
+            uniqueExternalDomains: new Set(Array.from(externalLinks.values()).map((l) => l.targetDomain)).size,
+          });
+        }
+
         const internalToEnqueue = new Map();
 
         $('a[href]').each((_, el) => {
@@ -516,6 +525,14 @@ try {
       startUrl,
       scanDomain: baseDomain,
       crawledPages: crawledPagesForDomain,
+    });
+
+    log.info('Domain crawl complete', {
+      domain: baseDomain,
+      pagesCrawled: crawledPagesForDomain,
+      totalExternalLinks: externalLinks.size,
+      totalExternalDomains: new Set(Array.from(externalLinks.values()).map((l) => l.targetDomain)).size,
+      crawlErrors: crawlErrors.length,
     });
   }
 
@@ -603,6 +620,15 @@ try {
     } catch (err) {
       log.warning('Failed to check link', { url: link.targetUrl, error: err?.message });
       linksChecked += 1;
+    }
+
+    if (linksChecked % 25 === 0) {
+      log.info('Link check progress', {
+        checked: linksChecked,
+        total: externalEntries.length,
+        brokenSoFar: brokenOutgoingLinks.length,
+        expiredDomainsSoFar: domainCandidatesMap.size,
+      });
     }
   });
 
