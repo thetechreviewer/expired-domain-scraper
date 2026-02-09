@@ -72,6 +72,7 @@
     "checkTimeoutSecs": {
       "title": "Outgoing link check timeout (seconds)",
       "type": "integer",
+      "description": "How long to wait when checking each outgoing link before timing out.",
       "minimum": 3,
       "maximum": 120,
       "default": 20
@@ -79,6 +80,7 @@
     "linkCheckConcurrency": {
       "title": "Outgoing link check concurrency",
       "type": "integer",
+      "description": "Number of outgoing links to check simultaneously.",
       "minimum": 1,
       "maximum": 200,
       "default": 30
