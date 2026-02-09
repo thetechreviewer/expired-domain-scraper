@@ -319,8 +319,7 @@ try {
       maxRequestsPerMinute: maxRequestsPerMinute > 0 ? maxRequestsPerMinute : undefined,
       requestHandlerTimeoutSecs: requestTimeoutSecs,
       useSessionPool: true,
-      ignoreSslErrors: true,
-      respectRobotsTxt,
+      respectRobotsTxtFile: respectRobotsTxt,
       async requestHandler({ request, $, contentType }) {
         if (requestDelayMax > 0) {
           await randomDelay(requestDelayMin, requestDelayMax);
@@ -561,6 +560,9 @@ try {
   await Actor.setValue('SUMMARY', summary);
 
   log.info('Actor finished', summary.stats);
+} catch (error) {
+  log.error('Actor failed', { message: error?.message, stack: error?.stack });
+  throw error;
 } finally {
   await Actor.exit();
 }
